@@ -1,103 +1,122 @@
 # Paperclip
 
-飞书论文分析机器人 - 自动获取、分析并推送 Hugging Face 每日论文到飞书群聊。
+**学术论文获取与转换工具** - 将 arXiv/CVF 论文转换为高质量 Markdown。
 
-## 功能特性
+## 核心特性
 
-- **每日论文推送**: 定时获取 Hugging Face 最新论文并推送到飞书
-- **PDF 解析**: 使用 MinerU 进行高质量 PDF 文档解析
-- **论文分析**: 支持快速/详细两种分析模式
-- **WebSocket 长连接**: 基于飞书事件订阅的实时通信
+- **双路径架构**: TeX 源码优先（高质量）→ PDF 回退（兜底）
+- **智能展平**: 自动处理 LaTeX `\input`/`\include` 模块化结构
+- **图片优化**: PDF 图表自动转 PNG，统一路径便于 LLM 解析
+- **多源支持**: arXiv ID / Hugging Face / CVF 会议论文
 
-## 安装
+## 快速开始
+
+### 安装依赖
 
 ```bash
+# 系统工具
+brew install pandoc imagemagick  # macOS
+sudo apt install pandoc imagemagick  # Ubuntu
+
+# Python 依赖
 pip install -e .
 ```
 
-或使用 uv：
+### 获取论文
 
 ```bash
-uv pip install -e .
+# arXiv ID（自动使用 TeX 源码）
+python -m paperclip.fetch_paper 2401.08689
+
+# CVF 会议论文
+python -m paperclip.fetch_paper https://openaccess.thecvf.com/content/CVPR2025/papers/xxx.pdf
+
+# 自定义输出目录
+python -m paperclip.fetch_paper 2401.08689 -o my_papers/
 ```
 
-## 配置
+### 输出结构
 
-复制 `.env.example` 为 `.env` 并配置：
-
-```bash
-cp .env.example .env
+```
+papers/{paper_id}/
+├── {paper_id}.md              # 最终 Markdown
+├── {paper_id}_metadata.json   # 元数据
+└── images/                   # 所有图片（PNG 格式）
 ```
 
-### 核心配置项
+## 架构流程
 
-| 配置项 | 说明 | 默认值 |
-|--------|------|--------|
-| `FEISHU_APP_ID` | 飞书应用 ID | - |
-| `FEISHU_APP_SECRET` | 飞书应用密钥 | - |
-| `HF_PAPERS_SCHEDULE_TIME` | 每日推送时间 | 09:00 |
-| `ANALYSIS_TIMEOUT` | 论文分析超时(秒) | 600 |
-| `ANALYSIS_FORMAT` | 分析格式 (quick/detailed) | quick |
-| `MINERU_GPU_DEVICE` | GPU 设备编号 (-1=仅CPU) | 0 |
-| `MINERU_BACKEND` | MinerU 后端类型 | hybrid-auto-engine |
+```
+arXiv ID
+  ↓
+[路径 1] TeX 源码 (优先)
+  ├─ 下载 arxiv.org/e-print/{id}
+  ├─ 解压 + 识别主文件 (main.tex > ms.tex > heuristics)
+  ├─ 展平 LaTeX (递归合并 \input/\include)
+  ├─ Pandoc 转换 (--katex --extract-media)
+  ├─ 图片处理 (PDF→PNG via ImageMagick)
+  └─ Markdown 后处理 (修复图片路径)
+  ↓
+[路径 2] PDF 回退 (路径 1 失败时)
+  ├─ 下载 PDF
+  ├─ MinerU OCR 解析
+  └─ 输出 Markdown
+```
 
-### MinerU 后端选项
+## 核心模块
 
-`MINERU_BACKEND` 支持以下选项：
-
-| 选项 | 说明 |
+| 模块 | 功能 |
 |------|------|
-| `pipeline` | 基础流水线模式 |
-| `hybrid-auto-engine` | 混合自动引擎（推荐） |
-| `hybrid-http-client` | 混合 HTTP 客户端 |
-| `vlm-auto-engine` | VLM 自动引擎 |
-| `vlm-http-client` | VLM HTTP 客户端 |
+| `fetch_paper.py` | 主入口，协调整个流程 |
+| `tex_fetcher.py` | arXiv TeX 源码下载与主文件识别 |
+| `tex_converter.py` | LaTeX 展平 + Pandoc 转换 + 图片处理 |
 
-## 使用
-
-### 启动机器人
+## 配置选项
 
 ```bash
-python -m paperclip.run_bot
+# .env 配置
+USE_TEX_PIPELINE=true          # 启用 TeX 路径（默认）
+MINERU_GPU_DEVICE=0           # GPU 设备号
+MINERU_BACKEND=pipeline        # MinerU 后端
 ```
 
-### 手动获取论文
+### 命令行参数
 
-```python
-from paperclip.huggingface import get_daily_papers
-papers = get_daily_papers("2024-02-05")
-```
+```bash
+python -m paperclip.fetch_paper <input> [options]
 
-### 分析单篇论文
-
-```python
-from paperclip.analyzer import analyze_paper
-result = analyze_paper("https://arxiv.org/abs/2401.00001")
-```
-
-## 项目结构
-
-```
-paperclip/
-├── run_bot.py          # 启动入口
-├── config.py           # 配置管理
-├── feishu_ws_client.py # WebSocket 客户端
-├── hf_daily_papers.py  # Hugging Face 论文获取
-├── fetch_paper.py      # PDF 下载与解析
-├── analyzer.py         # 论文分析器
-├── webhook.py          # Webhook 消息发送
-├── state.py            # 状态管理
-└── .env.example        # 配置模板
+--no-tex          # 禁用 TeX 路径，强制 PDF 解析
+--force-pdf       # 强制使用 PDF 路径
+-b pipeline       # MinerU 后端: pipeline/hybrid-auto-engine/vlm-auto-engine
+-d 0             # GPU 设备号
+-o papers/        # 输出目录
 ```
 
 ## 依赖
 
-- `httpx` - HTTP 客户端
-- `python-dotenv` - 环境变量管理
-- `mineru[all]` - PDF 解析
-- `schedule` - 任务调度
-- `lark-oapi` - 飞书开放平台 SDK
+### 系统工具
+- **pandoc** - LaTeX → Markdown 转换核心
+- **ImageMagick** 7.1+ - PDF 图片转 PNG
 
-## 许可证
+### Python 包
+- `httpx` - HTTP 客户端
+- `pypandoc` - Pandoc Python 绑定（可选，提升性能）
+- `mineru[all]` - PDF OCR 解析（回退路径）
+
+## 开发
+
+```python
+# Python API
+from paperclip.fetch_paper import fetch_paper
+
+paper_id = fetch_paper(
+    input_url="2401.08689",
+    output="papers/",
+    use_tex=True,          # 启用 TeX 路径
+    backend="pipeline"      # MinerU 后端
+)
+```
+
+## License
 
 MIT
