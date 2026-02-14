@@ -30,7 +30,14 @@ import re
 import shutil
 import time
 from pathlib import Path
-from typing import Tuple
+from typing import List, Tuple
+
+try:
+    from .tex_converter import PandocConverter
+    from .tex_fetcher import TeXFetcher
+except ImportError:
+    from tex_converter import PandocConverter
+    from tex_fetcher import TeXFetcher
 
 
 def detect_source(url_or_id: str) -> Tuple[str, str]:
@@ -189,6 +196,8 @@ def fetch_paper(
     output: str = "papers",
     backend: str = "pipeline",
     device: str = "0",
+    use_tex: bool = True,
+    force_pdf: bool = False,
 ) -> str:
     """获取论文并转换为 JSON + Markdown
 
@@ -197,11 +206,17 @@ def fetch_paper(
         output: 输出目录
         backend: MinerU 后端
         device: GPU 设备号
+        use_tex: arXiv 场景优先使用 TeX 源码
+        force_pdf: 强制使用 PDF 解析
 
     Returns:
         paper_id
     """
     os.environ['CUDA_VISIBLE_DEVICES'] = device
+    env_use_tex = os.getenv("USE_TEX_PIPELINE", "true").strip().lower() not in {"0", "false", "no"}
+    effective_use_tex = use_tex and env_use_tex
+    if not env_use_tex:
+        print("ℹ️  USE_TEX_PIPELINE=false，已禁用 TeX 路径")
 
     source, normalized = detect_source(input_url)
 
@@ -226,42 +241,28 @@ def fetch_paper(
         print(f"PAPER_ID:{paper_id}")
         return paper_id
 
-    print("⬇️  正在获取 PDF...")
+    success = False
 
-    # 使用 MinerU 解析
-    print(f"  正在解析 PDF (后端: {backend})...")
-    from mineru.cli.common import do_parse
+    # 路径 1: arXiv TeX 源码优先
+    if source == "arxiv" and effective_use_tex and not force_pdf:
+        print("⬇️  尝试 TeX 源码下载...")
+        success = _try_tex_source_pipeline(
+            arxiv_id=normalized,
+            metadata=metadata,
+            output_dir=output_dir,
+        )
 
-    pdf_filename = f"{paper_id}.pdf"
-    origin_pdf_path = output_dir / f"{paper_id}.pdf_origin.pdf"
+    # 路径 2: PDF 回退（或非 arXiv）
+    if not success:
+        print("⬇️  回退到 PDF 解析...")
+        success = _try_pdf_pipeline(
+            metadata=metadata,
+            output_dir=output_dir,
+            backend=backend,
+        )
 
-    # 检查是否有缓存的原始 PDF
-    if origin_pdf_path.exists():
-        print(f"  使用缓存的 PDF: {origin_pdf_path}")
-        pdf_bytes = origin_pdf_path.read_bytes()
-    else:
-        print(f"  正在下载 PDF: {metadata['pdf_url']}")
-        with httpx.Client(timeout=60) as client:
-            response = client.get(metadata['pdf_url'], follow_redirects=True)
-            response.raise_for_status()
-            pdf_bytes = response.content
-        print(f"  PDF 已下载 ({len(pdf_bytes)} bytes)")
-
-    do_parse(
-        output_dir=str(output_dir),
-        pdf_file_names=[pdf_filename],
-        pdf_bytes_list=[pdf_bytes],
-        p_lang_list=["en"],
-        backend=backend,
-        parse_method="auto",
-        formula_enable=True,
-        table_enable=True,
-        f_dump_md=True,
-        f_dump_middle_json=True,
-    )
-
-    # 整理输出文件
-    _reorganize_output(output_dir, pdf_filename, paper_id)
+    if not success:
+        raise RuntimeError("TeX 和 PDF 路径均失败")
 
     # 保存元数据
     (output_dir / f"{paper_id}_metadata.json").write_text(
@@ -272,6 +273,127 @@ def fetch_paper(
     print(f"✅ {output_dir}")
     print(f"PAPER_ID:{paper_id}")
     return paper_id
+
+
+def _try_tex_source_pipeline(arxiv_id: str, metadata: dict, output_dir: Path) -> bool:
+    """TeX path: download -> identify main tex -> pandoc convert -> copy images."""
+    fetcher = TeXFetcher(arxiv_id=arxiv_id, output_dir=output_dir)
+    ok, main_tex = fetcher.fetch()
+    if not ok or not main_tex:
+        return False
+
+    bib_files = [p for p in main_tex.parent.rglob("*.bib")]
+    converter = PandocConverter(tex_file=main_tex, output_dir=output_dir, bib_files=bib_files)
+    md_name = f"{metadata['id']}.md"
+    if not converter.convert(output_name=md_name):
+        return False
+
+    # 新增: 转换PDF为PNG
+    extracted = extract_figures_from_tex(
+        main_tex.parent,
+        output_dir,
+        convert_pdfs=True,  # 启用PDF转换
+        dpi=200
+    )
+    if extracted:
+        print(f"  ✅ 提取图像: {len(extracted)} 个")
+
+    # 新增: 后处理markdown文件
+    from paperclip.tex_converter import post_process_markdown_images
+    post_process_markdown_images(
+        output_dir / md_name,
+        output_dir
+    )
+
+    return True
+
+
+def _try_pdf_pipeline(metadata: dict, output_dir: Path, backend: str) -> bool:
+    """PDF fallback path using MinerU."""
+    print(f"  正在解析 PDF (后端: {backend})...")
+    from mineru.cli.common import do_parse
+
+    paper_id = metadata["id"]
+    pdf_filename = f"{paper_id}.pdf"
+    origin_pdf_path = output_dir / f"{paper_id}.pdf_origin.pdf"
+
+    try:
+        if origin_pdf_path.exists():
+            print(f"  使用缓存的 PDF: {origin_pdf_path}")
+            pdf_bytes = origin_pdf_path.read_bytes()
+        else:
+            print(f"  正在下载 PDF: {metadata['pdf_url']}")
+            with httpx.Client(timeout=60) as client:
+                response = client.get(metadata["pdf_url"], follow_redirects=True)
+                response.raise_for_status()
+                pdf_bytes = response.content
+            print(f"  PDF 已下载 ({len(pdf_bytes)} bytes)")
+
+        do_parse(
+            output_dir=str(output_dir),
+            pdf_file_names=[pdf_filename],
+            pdf_bytes_list=[pdf_bytes],
+            p_lang_list=["en"],
+            backend=backend,
+            parse_method="auto",
+            formula_enable=True,
+            table_enable=True,
+            f_dump_md=True,
+            f_dump_middle_json=True,
+        )
+        _reorganize_output(output_dir, pdf_filename, paper_id)
+        return (output_dir / f"{paper_id}.md").exists()
+    except Exception as e:
+        print(f"  ❌ PDF 解析失败: {e}")
+        return False
+
+
+def extract_figures_from_tex(
+    tex_dir: Path,
+    output_dir: Path,
+    convert_pdfs: bool = True,  # 新增参数
+    dpi: int = 200
+) -> List[Path]:
+    """Copy common image files from TeX source into output images/."""
+    image_exts = {".png", ".jpg", ".jpeg", ".pdf", ".eps", ".svg", ".webp"}
+    images = []
+    for path in tex_dir.rglob("*"):
+        if path.is_file() and path.suffix.lower() in image_exts:
+            images.append(path)
+
+    if not images:
+        return []
+
+    dest_dir = output_dir / "images"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    copied = []
+    name_count = {}
+    for src in images:
+        base = src.name
+        if base in name_count:
+            name_count[base] += 1
+            stem = src.stem
+            suffix = src.suffix
+            base = f"{stem}_{name_count[src.name]}{suffix}"
+        else:
+            name_count[base] = 1
+        dest = dest_dir / base
+        shutil.copy2(src, dest)
+
+        # 转换PDF为PNG
+        if convert_pdfs and dest.suffix.lower() == '.pdf':
+            from paperclip.tex_converter import convert_pdf_to_png
+            png_path = convert_pdf_to_png(dest, dpi=dpi)
+            if png_path:
+                copied.append(png_path)
+                print(f"  📷 已转换: {png_path.name}")
+                # 保留原PDF作为备份（可选）
+                # dest.unlink()  # 如需删除PDF，取消注释
+            else:
+                copied.append(dest)  # 转换失败，保留PDF
+        else:
+            copied.append(dest)
+    return copied
 
 
 def _reorganize_output(output_dir: Path, pdf_filename: str, paper_id: str) -> None:
@@ -345,6 +467,10 @@ def main():
                         help='MinerU 后端 (默认: pipeline, 更快更稳定)')
     parser.add_argument('-d', '--device', default='0',
                         help='MinerU 使用的 GPU 设备 (默认: 0，使用第二张 GPU 设为 1)')
+    parser.add_argument('--no-tex', dest='use_tex', action='store_false',
+                        help='禁用 TeX 源码路径，强制使用 PDF 解析')
+    parser.add_argument('--force-pdf', action='store_true',
+                        help='强制使用 PDF 路径（即使 TeX 可用）')
     args = parser.parse_args()
 
     fetch_paper(
@@ -352,6 +478,8 @@ def main():
         output=args.output,
         backend=args.backend,
         device=args.device,
+        use_tex=args.use_tex,
+        force_pdf=args.force_pdf,
     )
 
 

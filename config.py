@@ -45,7 +45,7 @@ class Settings:
     mineru_gpu_device = os.getenv("MINERU_GPU_DEVICE", "0")
 
     # MinerU 后端配置
-    mineru_backend = os.getenv("MINERU_BACKEND", "hybrid-auto-engine")
+    mineru_backend = os.getenv("MINERU_BACKEND", "pipeline")
 
 
 settings = Settings()
