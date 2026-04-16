@@ -15,6 +15,7 @@ from typing import Optional, Dict
 import lark_oapi as lark
 from lark_oapi.api.im.v1 import ReplyMessageRequest, ReplyMessageRequestBody
 from lark_oapi.api.im.v1 import PatchMessageRequest, PatchMessageRequestBody
+from lark_oapi.api.im.v1 import CreateMessageReactionRequest, CreateMessageReactionRequestBody, Emoji
 
 from .analyzer import analyze
 from .arxiv import parse_arxiv_url
@@ -41,6 +42,31 @@ def _extract_message_id(response) -> Optional[str]:
     if response.data and hasattr(response.data, 'message_id'):
         return response.data.message_id
     return None
+
+
+def add_reaction(message_id: str, emoji_type: str = "OK") -> None:
+    """
+    在消息上添加 emoji reaction
+
+    Args:
+        message_id: 要 reaction 的消息 ID
+        emoji_type: 表情类型，如 "OK" (👍), "SMILE" (😊)
+    """
+    try:
+        client = _create_client()
+        request = CreateMessageReactionRequest.builder() \
+            .message_id(message_id) \
+            .request_body(CreateMessageReactionRequestBody.builder()
+                .reaction_type(Emoji.builder().emoji_type(emoji_type).build())
+                .build()) \
+            .build()
+        response = client.im.v1.message_reaction.create(request)
+        if not response.success():
+            logger.warning(f"添加 reaction 失败: message_id={message_id}, code={response.code}, msg={response.msg}")
+        else:
+            logger.info(f"成功添加 reaction: message_id={message_id}, emoji={emoji_type}")
+    except Exception as e:
+        logger.warning(f"添加 reaction 异常: message_id={message_id}, error={e}")
 
 
 def _create_error_card(error_message: str) -> dict:
@@ -477,35 +503,20 @@ def do_p2_im_message_receive_v1(data: lark.im.v1.P2ImMessageReceiveV1) -> None:
 
         logger.info(f"找到 arXiv URL: {arxiv_url}")
 
+        # 在原消息上添加 reaction，让用户立即看到响应
+        add_reaction(message_id)
+
         # 在独立线程中处理分析（避免阻塞 WebSocket）
         def process():
             try:
-                # 发送处理中卡片，获取新消息 ID
-                reply_msg_id = reply_card_message(message_id, f"正在分析论文 {arxiv_url}，请稍候...")
-
                 result = analyze(arxiv_url)
 
                 if result["returncode"] == 0:
-                    # 更新消息为论文分析卡片
                     paper_id = result.get("arxiv_id", "")
-                    if reply_msg_id:
-                        update_with_paper_card(reply_msg_id, result["stdout"], arxiv_url, paper_id)
-                    else:
-                        reply_paper_card(message_id, result["stdout"], arxiv_url, paper_id)
+                    reply_paper_card(message_id, result["stdout"], arxiv_url, paper_id)
                 else:
-                    # 更新消息为错误信息
                     error_msg = f"❌ 论文分析失败: {result.get('stderr', 'Unknown error')}"
-                    if reply_msg_id:
-                        client = _create_client()
-                        request = PatchMessageRequest.builder() \
-                            .message_id(reply_msg_id) \
-                            .request_body(PatchMessageRequestBody.builder()
-                                .content(json.dumps(_create_error_card(error_msg)))
-                                .build()) \
-                            .build()
-                        client.im.v1.message.patch(request)
-                    else:
-                        reply_card_message(message_id, error_msg)
+                    reply_card_message(message_id, error_msg)
 
             except Exception as e:
                 logger.exception(f"处理论文异常: message_id={message_id}, error={e}")
