@@ -2,6 +2,7 @@
 .env
 .env.local
 .env.*.local
+uv.lock
 
 # ─── Python ──────────────────────────────────────────────────
 __pycache__/
