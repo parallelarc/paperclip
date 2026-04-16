@@ -7,6 +7,32 @@ from pathlib import Path
 from typing import List, Optional
 
 
+def preprocess_latex_for_pandoc(tex_content: str) -> str:
+    """
+    预处理 LaTeX 内容，修复 pandoc 无法解析的非标准构造
+
+    处理的问题包括：
+    1. \makedirs{...} → \makedirs（去掉参数，pandoc 不支持此非标准语法）
+    2. \centerline{\makedirs{...}} → 空行（此类构造无意义）
+    """
+    # 修复 \makedirs{参数}：pandoc 不识别此命令的参数，只保留命令本身
+    # 模式：\makedirs 后面紧跟 {内容}，但 {内容} 不符合标准 LaTeX
+    tex_content = re.sub(
+        r'\\makedirs\s*\{[^{}]*\}',
+        r'\\makedirs',
+        tex_content
+    )
+
+    # 修复 \centerline{\makedirs{...}}：整行替换为空段落，避免 pandoc 报错
+    tex_content = re.sub(
+        r'\\centerline\s*\{\\makedirs[^}]*\}',
+        '',
+        tex_content
+    )
+
+    return tex_content
+
+
 def flatten_latex_file(tex_file: Path, output: Optional[Path] = None) -> Path:
     """
     递归合并所有\input和\include文件到单个tex文件
@@ -190,21 +216,29 @@ class PandocConverter:
         md_name = output_name or f"{self.tex_file.stem}.md"
         md_output = self.output_dir / md_name
 
-        # 展平LaTeX文件解决\input问题
+        # 展平 + 预处理（修复非标准 LaTeX 构造）
         source_tex = flatten_latex_file(self.tex_file)
+        preprocessed_tex = self._preprocess_tex(source_tex)
 
-        if self._convert_with_pypandoc(md_output, source_tex):
-            # 清理临时flatten文件
+        if self._convert_with_pypandoc(md_output, preprocessed_tex):
+            # 清理临时 flatten 文件
             if source_tex != self.tex_file and source_tex.exists():
                 source_tex.unlink()
             return True
 
-        # CLI回退也使用展平后的文件
-        result = self._convert_with_cli(md_output, source_tex)
+        # CLI回退也使用预处理后的文件
+        result = self._convert_with_cli(md_output, preprocessed_tex)
         # 清理临时文件
         if source_tex != self.tex_file and source_tex.exists():
             source_tex.unlink()
         return result
+
+    def _preprocess_tex(self, tex_path: Path) -> Path:
+        """读取展平后的 tex，预处理后写回（覆盖原文件供 pandoc 使用）"""
+        content = tex_path.read_text(encoding='utf-8')
+        content = preprocess_latex_for_pandoc(content)
+        tex_path.write_text(content, encoding='utf-8')
+        return tex_path
 
     def _build_extra_args(self) -> List[str]:
         # 创建图片目录

@@ -32,9 +32,10 @@ def get_result_path(paper_id: str) -> Path:
         paper_id: 论文 ID (arXiv 或 CVF)
 
     Returns:
-        结果文件路径 papers/{paper_id}/{paper_id}_quick.md
+        结果文件路径 paperclip/papers/{paper_id}/{paper_id}_quick.md
+        （与 fetch_paper.py 的默认 output="papers" 路径保持一致）
     """
-    return settings.project_root / "papers" / paper_id / f"{paper_id}_quick.md"
+    return settings.env_dir / "papers" / paper_id / f"{paper_id}_quick.md"
 
 
 def _extract_markdown_from_stdout(stdout: str) -> str:
@@ -93,7 +94,7 @@ def _run_fetch_script(url: str) -> str:
 
     paper_id = fetch_paper(
         input_url=url,
-        output="papers",
+        output=str(settings.env_dir / "papers"),
         device=settings.mineru_gpu_device,
         backend=settings.mineru_backend,
     )

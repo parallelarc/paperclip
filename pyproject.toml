@@ -1,0 +1,29 @@
+[project]
+name = "paperclip"
+version = "0.1.0"
+description = "学术论文获取与转换工具 — arXiv/CVF 论文转 Markdown"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx",
+    "python-dotenv",
+    "lark-oapi",
+    "pypandoc>=1.14",
+]
+
+[project.optional-dependencies]
+full = [
+    "mineru[all]",
+    "faster-whisper>=1.1.0",
+    "dill",
+    "pyclipper",
+    "schedule",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["paperclip*"]
