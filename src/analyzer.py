@@ -6,7 +6,7 @@ from pathlib import Path
 
 # 支持直接运行脚本：添加项目根目录到 sys.path
 if __name__ == "__main__":
-    project_root = Path(__file__).parent.parent
+    project_root = Path(__file__).parent
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
 
@@ -14,12 +14,8 @@ import logging
 import subprocess
 
 # 支持直接运行脚本时的导入
-try:
-    from .config import settings
-    from .fetch_paper import fetch_paper
-except ImportError:
-    from paperclip.config import settings
-    from paperclip.fetch_paper import fetch_paper
+from .config import settings
+from .fetch_paper import fetch_paper
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +28,7 @@ def get_result_path(paper_id: str) -> Path:
         paper_id: 论文 ID (arXiv 或 CVF)
 
     Returns:
-        结果文件路径 paperclip/papers/{paper_id}/{paper_id}_quick.md
+        结果文件路径 src/papers/{paper_id}/{paper_id}_quick.md
         （与 fetch_paper.py 的默认 output="papers" 路径保持一致）
     """
     return settings.env_dir / "papers" / paper_id / f"{paper_id}_quick.md"
@@ -143,7 +139,7 @@ def analyze(arxiv_url: str) -> dict:
         ["claude", "--dangerously-skip-permissions", "-p", prompt],
         capture_output=True,
         text=True,
-        cwd=str(settings.project_root),
+        cwd=str(settings.env_dir),
         timeout=settings.analysis_timeout
     )
 

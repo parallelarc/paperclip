@@ -283,7 +283,7 @@ def _process_markdown_images(markdown: str, paper_id: str) -> Dict[str, str]:
     Returns:
         {filename: img_key} 的字典
     """
-    images_dir = settings.project_root / "papers" / paper_id / "images"
+    images_dir = settings.env_dir / "papers" / paper_id / "images"
 
     if not images_dir.exists():
         logger.debug(f"图片目录不存在: {images_dir}")

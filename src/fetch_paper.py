@@ -299,7 +299,7 @@ def _try_tex_source_pipeline(arxiv_id: str, metadata: dict, output_dir: Path) ->
         print(f"  ✅ 提取图像: {len(extracted)} 个")
 
     # 新增: 后处理markdown文件
-    from paperclip.tex_converter import post_process_markdown_images
+    from .tex_converter import post_process_markdown_images
     post_process_markdown_images(
         output_dir / md_name,
         output_dir
@@ -382,7 +382,7 @@ def extract_figures_from_tex(
 
         # 转换PDF为PNG
         if convert_pdfs and dest.suffix.lower() == '.pdf':
-            from paperclip.tex_converter import convert_pdf_to_png
+            from .tex_converter import convert_pdf_to_png
             png_path = convert_pdf_to_png(dest, dpi=dpi)
             if png_path:
                 copied.append(png_path)

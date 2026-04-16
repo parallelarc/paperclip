@@ -5,7 +5,7 @@ import signal
 import sys
 import time
 
-from paperclip.feishu_ws_client import start_ws_thread, stop_ws_client
+from .feishu_ws_client import start_ws_thread, stop_ws_client
 
 logging.basicConfig(
     level=logging.INFO,

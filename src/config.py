@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-ENV_DIR = Path(__file__).parent
+ENV_DIR = Path(__file__).parent.parent
 load_dotenv(ENV_DIR / ".env")
 
 
@@ -14,7 +14,6 @@ class Settings:
 
     # 目录
     env_dir = ENV_DIR
-    project_root = ENV_DIR.parent
     state_dir = ENV_DIR / "state"
 
     # 飞书 Webhook

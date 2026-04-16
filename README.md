@@ -11,28 +11,18 @@
 
 ## 快速开始
 
-### 安装依赖
-
-```bash
-# 系统工具
-brew install pandoc imagemagick  # macOS
-sudo apt install pandoc imagemagick  # Ubuntu
-
-# Python 依赖
-pip install -e .
-```
 
 ### 获取论文
 
 ```bash
 # arXiv ID（自动使用 TeX 源码）
-python -m paperclip.fetch_paper 2401.08689
+python -m src.fetch_paper 2401.08689
 
 # CVF 会议论文
-python -m paperclip.fetch_paper https://openaccess.thecvf.com/content/CVPR2025/papers/xxx.pdf
+python -m src.fetch_paper https://openaccess.thecvf.com/content/CVPR2025/papers/xxx.pdf
 
 # 自定义输出目录
-python -m paperclip.fetch_paper 2401.08689 -o my_papers/
+python -m src.fetch_paper 2401.08689 -o my_papers/
 ```
 
 ### 输出结构
@@ -83,7 +73,7 @@ MINERU_BACKEND=pipeline        # MinerU 后端
 ### 命令行参数
 
 ```bash
-python -m paperclip.fetch_paper <input> [options]
+python -m src.fetch_paper <input> [options]
 
 --no-tex          # 禁用 TeX 路径，强制 PDF 解析
 --force-pdf       # 强制使用 PDF 路径
@@ -107,7 +97,7 @@ python -m paperclip.fetch_paper <input> [options]
 
 ```python
 # Python API
-from paperclip.fetch_paper import fetch_paper
+from src.fetch_paper import fetch_paper
 
 paper_id = fetch_paper(
     input_url="2401.08689",

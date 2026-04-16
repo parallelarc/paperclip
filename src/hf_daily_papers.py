@@ -8,13 +8,13 @@ Hugging Face Daily Papers 定时分析脚本
 
 使用方法：
     # 手动运行一次
-    python -m paperclip.hf_daily_papers
+    python -m src.hf_daily_papers
 
     # 并发处理（同时分析 10 篇）
-    python -m paperclip.hf_daily_papers --concurrent 10
+    python -m src.hf_daily_papers --concurrent 10
 
     # 启动定时任务（每天早上 9 点运行）
-    python -m paperclip.hf_daily_papers --schedule
+    python -m src.hf_daily_papers --schedule
 """
 import argparse
 import asyncio
@@ -184,9 +184,9 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例：
-  python -m paperclip.hf_daily_papers --limit 5
-  python -m paperclip.hf_daily_papers --concurrent 10 --limit 20
-  python -m paperclip.hf_daily_papers --schedule --concurrent 15
+  python -m src.hf_daily_papers --limit 5
+  python -m src.hf_daily_papers --concurrent 10 --limit 20
+  python -m src.hf_daily_papers --schedule --concurrent 15
         """
     )
     parser.add_argument(
