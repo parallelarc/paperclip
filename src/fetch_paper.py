@@ -98,7 +98,7 @@ def fetch_arxiv_metadata(arxiv_id: str) -> dict:
 
     for attempt in range(max_retries):
         try:
-            with httpx.Client(timeout=30) as client:
+            with httpx.Client(timeout=30, http2=False, trust_env=False) as client:
                 response = client.get(url, follow_redirects=True)
                 response.raise_for_status()
                 content = response.text
@@ -323,7 +323,7 @@ def _try_pdf_pipeline(metadata: dict, output_dir: Path, backend: str) -> bool:
             pdf_bytes = origin_pdf_path.read_bytes()
         else:
             print(f"  正在下载 PDF: {metadata['pdf_url']}")
-            with httpx.Client(timeout=60) as client:
+            with httpx.Client(timeout=60, http2=False, trust_env=False) as client:
                 response = client.get(metadata["pdf_url"], follow_redirects=True)
                 response.raise_for_status()
                 pdf_bytes = response.content

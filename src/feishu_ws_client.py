@@ -241,7 +241,8 @@ def _upload_image_to_feishu(image_path: Path, client: lark.Client) -> Optional[s
                 "app_id": settings.feishu_app_id,
                 "app_secret": settings.feishu_app_secret
             },
-            timeout=10
+            timeout=10,
+            trust_env=False
         )
         token_response.raise_for_status()
         token_data = token_response.json()
@@ -257,7 +258,7 @@ def _upload_image_to_feishu(image_path: Path, client: lark.Client) -> Optional[s
         files = {"image": (image_path.name, image_data, f"image/{img_type}")}
         data = {"image_type": "message"}
 
-        upload_response = httpx.post(upload_url, headers=headers, files=files, data=data, timeout=30)
+        upload_response = httpx.post(upload_url, headers=headers, files=files, data=data, timeout=30, trust_env=False)
         result = upload_response.json()
 
         if upload_response.status_code != 200 or result.get("code") != 0:
@@ -534,7 +535,7 @@ def _start_lark_client():
         settings.feishu_app_id,
         settings.feishu_app_secret,
         event_handler=event_handler,
-        log_level=lark.LogLevel.INFO
+        log_level=lark.LogLevel.DEBUG
     )
 
     _client.start()

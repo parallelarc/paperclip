@@ -7,28 +7,71 @@ from pathlib import Path
 from typing import List, Optional
 
 
+def find_balanced_brace(text: str, start: int) -> int:
+    """
+    从 text[start] 开始，找到匹配 } 的位置。
+    假设 text[start] 是 {。使用括号计数，支持任意深度嵌套。
+    返回匹配的 } 的索引，不包含则返回 -1。
+    """
+    depth = 0
+    i = start
+    while i < len(text):
+        c = text[i]
+        if c == '{':
+            depth += 1
+        elif c == '}':
+            depth -= 1
+            if depth == 0:
+                return i
+        elif c == '\\':
+            # 跳过转义字符，避免 } 被错误计为括号闭合
+            i += 2
+            continue
+        i += 1
+    return -1
+
+
 def preprocess_latex_for_pandoc(tex_content: str) -> str:
     """
-    预处理 LaTeX 内容，修复 pandoc 无法解析的非标准构造
+    预处理 LaTeX 内容，修复 pandoc 无法解析的非标准构造。
 
-    处理的问题包括：
-    1. \makedirs{...} → \makedirs（去掉参数，pandoc 不支持此非标准语法）
-    2. \centerline{\makedirs{...}} → 空行（此类构造无意义）
+    使用括号计数处理任意深度嵌套的大括号。
     """
-    # 修复 \makedirs{参数}：pandoc 不识别此命令的参数，只保留命令本身
-    # 模式：\makedirs 后面紧跟 {内容}，但 {内容} 不符合标准 LaTeX
-    tex_content = re.sub(
-        r'\\makedirs\s*\{[^{}]*\}',
-        r'\\makedirs',
-        tex_content
-    )
 
-    # 修复 \centerline{\makedirs{...}}：整行替换为空段落，避免 pandoc 报错
-    tex_content = re.sub(
-        r'\\centerline\s*\{\\makedirs[^}]*\}',
-        '',
-        tex_content
-    )
+    def strip_cmd(command: str, text: str) -> str:
+        """去除 \command{...} → \command，支持任意深度嵌套"""
+        pos = 0
+        while True:
+            idx = text.find('\\' + command, pos)
+            if idx == -1:
+                break
+            # 找到 { 开始位置
+            brace_start = text.find('{', idx)
+            if brace_start == -1:
+                break
+            brace_end = find_balanced_brace(text, brace_start)
+            if brace_end == -1:
+                break
+            # 替换为 \command（无参数）
+            text = text[:idx] + '\\' + command + text[brace_end + 1:]
+            pos = idx + len(command) + 1
+        return text
+
+    # 去除 \makedirs{...}
+    tex_content = strip_cmd('makedirs', tex_content)
+
+    # 去除 \makeno{...}
+    tex_content = strip_cmd('makeno', tex_content)
+
+    # 去除所有 \centerline{...} 整行（使用括号计数）
+    lines = tex_content.split('\n')
+    result_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith('\\centerline'):
+            continue  # 跳过整行
+        result_lines.append(line)
+    tex_content = '\n'.join(result_lines)
 
     return tex_content
 

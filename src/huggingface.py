@@ -147,7 +147,7 @@ async def fetch_hf_papers(
     all_papers = []
     seen_ids = set()  # 跟踪本次已添加的论文 ID，防止重复
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(trust_env=False) as client:
         for day in dates_to_try:
             if len(all_papers) >= limit:
                 break

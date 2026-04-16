@@ -51,7 +51,7 @@ class TeXFetcher:
 
         for attempt in range(max_retries):
             try:
-                with httpx.Client(timeout=60) as client:
+                with httpx.Client(timeout=60, http2=False, trust_env=False) as client:
                     response = client.get(url, follow_redirects=True)
                     response.raise_for_status()
                     data = response.content
