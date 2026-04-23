@@ -29,7 +29,7 @@ from .config import settings
 from .webhook import send_webhook
 from .state import StateManager
 from .arxiv import build_arxiv_url
-from .analyzer import analyze
+from .analyzer_sdk import analyze_from_url as analyze
 from .huggingface import fetch_hf_papers
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

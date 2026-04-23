@@ -17,7 +17,7 @@ from lark_oapi.api.im.v1 import ReplyMessageRequest, ReplyMessageRequestBody
 from lark_oapi.api.im.v1 import PatchMessageRequest, PatchMessageRequestBody
 from lark_oapi.api.im.v1 import CreateMessageReactionRequest, CreateMessageReactionRequestBody, Emoji
 
-from .analyzer import analyze
+from .analyzer_sdk import analyze_from_url as analyze
 from .arxiv import parse_arxiv_url
 from .config import settings
 
