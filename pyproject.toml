@@ -8,7 +8,10 @@ dependencies = [
     "httpx",
     "python-dotenv",
     "lark-oapi",
-    "pypandoc>=1.14",
+    "pypandoc_binary>=1.14",
+    "dotenv>=0.9.9",
+    "anthropic>=0.97.0",
+    "pymupdf>=1.27.2.3",
 ]
 
 [project.optional-dependencies]

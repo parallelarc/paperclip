@@ -2,6 +2,7 @@
 """Pandoc-based TeX to Markdown converter."""
 
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import List, Optional
@@ -135,42 +136,18 @@ def flatten_latex_file(tex_file: Path, output: Optional[Path] = None) -> Path:
 
 
 def convert_pdf_to_png(pdf_path: Path, dpi: int = 200) -> Optional[Path]:
-    """
-    使用ImageMagick将PDF转换为PNG
-
-    优势:
-    - ImageMagick 7.1.2-13已安装
-    - 高质量转换
-    - 支持多页PDF
-    - 自动检测密度
-
-    参数:
-        pdf_path: PDF文件路径
-        dpi: 分辨率，默认200（足够清晰，文件适中）
-
-    返回:
-        PNG文件路径，失败返回None
-    """
+    """将PDF转换为PNG（使用PyMuPDF，无需外部依赖）"""
     try:
-        # 生成PNG路径
+        import fitz
+
         png_path = pdf_path.with_suffix('.png')
+        zoom = dpi / 72
+        doc = fitz.open(str(pdf_path))
+        page = doc.load_page(0)
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+        pix.save(str(png_path))
+        doc.close()
 
-        # 使用ImageMagick转换为PNG
-        cmd = [
-            'convert',
-            '-density', str(dpi),     # 设置DPI
-            str(pdf_path),            # 输入文件
-            str(png_path)             # 输出文件
-        ]
-
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=True
-        )
-
-        # 验证文件生成了
         if not png_path.exists():
             print(f"  ⚠️  PNG未生成: {png_path.name}")
             return None
@@ -179,9 +156,6 @@ def convert_pdf_to_png(pdf_path: Path, dpi: int = 200) -> Optional[Path]:
         print(f"  📷 PDF→PNG: {png_path.name} ({size_kb}KB)")
         return png_path
 
-    except subprocess.CalledProcessError as e:
-        print(f"  ❌ PDF转换失败: {e.stderr}")
-        return None
     except Exception as e:
         print(f"  ❌ 转换异常: {e}")
         return None
@@ -308,7 +282,7 @@ class PandocConverter:
     def _convert_with_pypandoc(self, md_output: Path, source_tex: Path) -> bool:
         try:
             import pypandoc
-        except Exception:
+        except ImportError:
             return False
 
         try:
@@ -326,8 +300,19 @@ class PandocConverter:
             return False
 
     def _convert_with_cli(self, md_output: Path, source_tex: Path) -> bool:
+        pandoc_bin = shutil.which("pandoc") or ""
+        if not pandoc_bin:
+            try:
+                import pypandoc
+                pandoc_bin = pypandoc.get_pandoc_path()
+            except Exception:
+                pass
+        if not pandoc_bin:
+            print("  ❌ pandoc 未安装，无法执行 TeX 转换")
+            return False
+
         cmd = [
-            "pandoc",
+            pandoc_bin,
             str(source_tex),
             "-f",
             "latex",
@@ -348,9 +333,6 @@ class PandocConverter:
             subprocess.run(cmd, check=True, capture_output=True, text=True)
             print(f"  ✅ pandoc CLI 转换成功: {md_output.name}")
             return True
-        except FileNotFoundError:
-            print("  ❌ pandoc 未安装，无法执行 TeX 转换")
-            return False
         except subprocess.CalledProcessError as e:
             stderr = (e.stderr or "").strip()
             if stderr:

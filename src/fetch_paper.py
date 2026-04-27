@@ -95,11 +95,11 @@ def fetch_arxiv_metadata(arxiv_id: str) -> dict:
         元数据字典
     """
     url = f"https://export.arxiv.org/api/query?id_list={arxiv_id}"
-    max_retries = 3
+    max_retries = 5
 
     for attempt in range(max_retries):
         try:
-            with httpx.Client(timeout=30, http2=False, trust_env=False) as client:
+            with httpx.Client(timeout=60, http2=False, trust_env=False) as client:
                 response = client.get(url, follow_redirects=True)
                 response.raise_for_status()
                 content = response.text
@@ -108,9 +108,9 @@ def fetch_arxiv_metadata(arxiv_id: str) -> dict:
             if attempt < max_retries - 1:
                 is_rate_limited = isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 429
                 if is_rate_limited:
-                    wait = 5 * (2 ** attempt) + random.uniform(0, 3)
+                    wait = 15 * (2 ** attempt) + random.uniform(0, 5)
                 else:
-                    wait = 2 ** attempt + random.uniform(0, 1)
+                    wait = 3 * (2 ** attempt) + random.uniform(0, 2)
                 print(f"  获取元数据失败 (尝试 {attempt + 1}/{max_retries}): {e}, {wait:.1f}秒后重试...")
                 time.sleep(wait)
             else:

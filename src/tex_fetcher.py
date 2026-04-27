@@ -2,6 +2,7 @@
 """arXiv TeX source downloader."""
 
 import io
+import random
 import shutil
 import tarfile
 import time
@@ -47,11 +48,11 @@ class TeXFetcher:
     def _download_tar_gz(self) -> Optional[bytes]:
         """Download source package bytes from arXiv e-print endpoint."""
         url = f"https://arxiv.org/e-print/{self.arxiv_id}"
-        max_retries = 3
+        max_retries = 5
 
         for attempt in range(max_retries):
             try:
-                with httpx.Client(timeout=60, http2=False, trust_env=False) as client:
+                with httpx.Client(timeout=90, http2=False, trust_env=False) as client:
                     response = client.get(url, follow_redirects=True)
                     response.raise_for_status()
                     data = response.content
@@ -61,8 +62,9 @@ class TeXFetcher:
                 return data
             except Exception as e:
                 if attempt < max_retries - 1:
-                    wait = 2 ** attempt
-                    print(f"  下载 TeX 失败 (尝试 {attempt + 1}/{max_retries}): {e}, {wait}秒后重试...")
+                    is_rate_limited = isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 429
+                    wait = 15 * (2 ** attempt) + random.uniform(0, 5) if is_rate_limited else 3 * (2 ** attempt) + random.uniform(0, 2)
+                    print(f"  下载 TeX 失败 (尝试 {attempt + 1}/{max_retries}): {e}, {wait:.1f}秒后重试...")
                     time.sleep(wait)
                 else:
                     print(f"  ❌ 下载 TeX 失败: {e}")
