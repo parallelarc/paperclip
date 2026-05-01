@@ -1,13 +1,12 @@
 # Paperclip
 
-**飞书论文分析机器人** — 在飞书中 @机器人 发送论文链接，自动获取、分析并返回结构化解读。
+**飞书论文分析机器人** — 在飞书中 @机器人 发送论文或 GitHub 仓库链接，自动获取分析并返回结构化解读。
 
 ## 核心特性
 
-- **飞书交互**: WebSocket 长连接，@机器人 发论文链接即可触发分析，结果以卡片形式推送
-- **多源支持**: arXiv / Hugging Face Papers / CVF 会议论文
-- **双路径获取**: TeX 源码优先（高质量）→ PDF 回退（MinerU OCR）
-- **三步分析管道**: Deep → Notes → Quick，通过 Anthropic API 直调，带指数退避重试
+- **飞书交互**: WebSocket 长连接，@机器人 发链接即可触发分析，结果以卡片形式推送
+- **论文分析**: 支持 arXiv / Hugging Face Papers / CVF 会议论文，TeX 源码优先 → PDF 回退，三步分析管道（Deep → Notes → Quick）
+- **GitHub 仓库总结**: 发送 GitHub URL，通过 DeepWiki 获取中文项目摘要（零 LLM 调用，零 API 成本）
 - **每日论文推送**: 定时从 HuggingFace Daily Papers 抓取新论文，并发分析后推送到飞书群
 
 ## 快速开始
@@ -53,10 +52,11 @@ python -m src.hf_daily_papers --schedule
 
 ### 1. 飞书 @机器人
 
-在群聊中 @机器人 并发送论文链接：
+在群聊中 @机器人 并发送链接：
 
 ```
-@Paperclip https://arxiv.org/abs/2401.08689
+@Paperclip https://arxiv.org/abs/2401.08689        # 论文分析
+@Paperclip https://github.com/modelcontextprotocol/servers  # GitHub 仓库总结
 ```
 
 机器人会添加 👍 reaction 表示已收到，分析完成后以卡片形式回复结果。
@@ -76,19 +76,24 @@ python -m src.fetch_paper <arxiv_id_or_url> [-o papers/] [--no-tex]
 ```
 飞书 @机器人 / HF 定时任务
   ↓
-[URL 解析] arxiv.py → 统一提取 arXiv ID
+[URL 解析] url_parser.py → 识别论文 URL 或 GitHub URL
   ↓
-[论文获取] fetch_paper.py
-  ├─ [路径 1] TeX 源码 (优先)
-  │   ├─ tex_fetcher: 下载 + 识别主文件
-  │   └─ tex_converter: 展平 LaTeX → Pandoc → Markdown
-  └─ [路径 2] PDF 回退
-      └─ MinerU OCR 解析
-  ↓
-[论文分析] analyzer_sdk.py (Anthropic API 直调)
-  ├─ Step 1: Deep 深度分析
-  ├─ Step 2: Notes 笔记提炼
-  └─ Step 3: Quick 速览摘要
+  ├─ 论文路径 ──────────────────────────────────────────────┐
+  │   [论文获取] fetch_paper.py                              │
+  │   ├─ [路径 1] TeX 源码 (优先)                            │
+  │   │   ├─ tex_fetcher: 下载 + 识别主文件                   │
+  │   │   └─ tex_converter: 展平 LaTeX → Pandoc → Markdown   │
+  │   └─ [路径 2] PDF 回退                                   │
+  │       └─ MinerU OCR 解析                                 │
+  │   ↓                                                      │
+  │   [论文分析] analyzer_sdk.py (Anthropic API 直调)         │
+  │   ├─ Step 1: Deep 深度分析                               │
+  │   ├─ Step 2: Notes 笔记提炼                              │
+  │   └─ Step 3: Quick 速览摘要                              │
+  │                                                          │
+  └─ GitHub 路径 ────────────────────────────────────────────┘
+      [仓库总结] deepwiki_client.py (DeepWiki MCP)
+      └─ ask_question → 中文项目摘要
   ↓
 [结果推送]
   ├─ feishu_ws_client: 卡片消息 + 图片上传 + emoji reaction
@@ -109,7 +114,8 @@ python -m src.fetch_paper <arxiv_id_or_url> [-o papers/] [--no-tex]
 | `tex_converter.py` | LaTeX 展平 + Pandoc 转换 + 图片处理 |
 | `hf_daily_papers.py` | HuggingFace 每日论文定时分析（支持并发） |
 | `huggingface.py` | HuggingFace Papers API 数据获取 |
-| `arxiv.py` | URL 解析（arXiv / CVF / HuggingFace） |
+| `url_parser.py` | URL 解析（arXiv / CVF / HuggingFace / GitHub） |
+| `deepwiki_client.py` | DeepWiki MCP 客户端，GitHub 仓库中文摘要 |
 | `config.py` | 环境变量配置管理 |
 | `state.py` | 处理状态持久化（并发安全，文件锁） |
 
@@ -136,6 +142,7 @@ papers/{paper_id}/
 | `ANTHROPIC_MODEL` | 分析用模型 | `claude-sonnet-4-20250514` |
 | `ANTHROPIC_BASE_URL` | 自定义 API 端点（兼容 z.ai 等） | — |
 | `ANALYSIS_TIMEOUT` | 单篇分析超时（秒） | `600` |
+| `DEEPWIKI_MCP_URL` | DeepWiki MCP 服务端点 | `https://mcp.deepwiki.com/mcp` |
 | `HF_PAPERS_SCHEDULE_TIME` | HF 定时推送时间 | `09:00` |
 | `MINERU_GPU_DEVICE` | MinerU GPU 设备号 | `0` |
 | `MINERU_BACKEND` | MinerU 后端 | `pipeline` |

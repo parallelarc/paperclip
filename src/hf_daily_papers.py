@@ -23,7 +23,6 @@ import time
 from typing import List, Optional
 
 import httpx
-import schedule
 
 from .config import settings
 from .webhook import send_webhook
@@ -156,6 +155,8 @@ async def process_papers(limit: int = None, skip_processed: bool = True, concurr
 
 def run_scheduled_task(schedule_time: str, concurrent: int = 2):
     """运行定时任务"""
+    import schedule
+
     logger.info(f"定时任务已启动，每天 {schedule_time} 运行，并发数={concurrent}")
     logger.info("按 Ctrl+C 停止")
 

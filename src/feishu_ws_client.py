@@ -4,9 +4,9 @@
 使用 lark-oapi SDK 建立长连接，无需公网 IP 或内网穿透
 """
 import httpx
-import imghdr
 import json
 import logging
+import mimetypes
 import re
 import threading
 from pathlib import Path
@@ -258,7 +258,7 @@ def _upload_image_to_feishu(image_path: Path, client: lark.Client) -> Optional[s
             image_data = f.read()
 
         # 获取文件类型
-        img_type = imghdr.what(image_path) or "jpg"
+        img_type = (mimetypes.guess_type(image_path.name)[0] or "image/jpeg").split("/")[-1]
 
         # 获取 tenant_access_token
         token_url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"

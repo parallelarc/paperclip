@@ -2,7 +2,6 @@
 
 import json
 import logging
-import re
 import time
 
 import httpx
@@ -74,26 +73,21 @@ def _extract_text(result: dict) -> str:
 
 
 def ask_repo_summary(repo_url: str) -> str:
-    """
-    通过 DeepWiki ask_question 获取仓库中文摘要。
-
-    Args:
-        repo_url: GitHub 仓库 URL
-
-    Returns:
-        中文摘要文本
-
-    Raises:
-        RuntimeError: 获取失败
-        ValueError: 无效的 GitHub URL
-    """
+    """通过 DeepWiki ask_question 获取仓库中文摘要，结果缓存到本地。"""
     from .url_parser import extract_github_repo_id
     repo_id = extract_github_repo_id(repo_url)
     if not repo_id:
         raise ValueError(f"无效的 GitHub URL: {repo_url}")
 
-    repo_name = repo_id.replace("_", "/", 1)
+    # 缓存检查
+    repo_dir = settings.env_dir / "repos" / repo_id
+    summary_path = repo_dir / "summary.md"
+    if summary_path.exists():
+        logger.info("使用缓存: repo_id=%s", repo_id)
+        return summary_path.read_text(encoding="utf-8")
 
+    # 调用 DeepWiki
+    repo_name = repo_id.replace("_", "/", 1)
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
             _rpc("initialize", {
@@ -107,7 +101,20 @@ def ask_repo_summary(repo_url: str) -> str:
                 "repoName": repo_name,
                 "question": _SUMMARY_QUESTION,
             }, request_id=1)
-            return _extract_text(result)
+            text = _extract_text(result)
+
+            # 写入缓存
+            repo_dir.mkdir(parents=True, exist_ok=True)
+            summary_path.write_text(text, encoding="utf-8")
+            metadata = {
+                "repo_url": repo_url,
+                "repo_id": repo_id,
+                "analyzed_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            }
+            (repo_dir / "metadata.json").write_text(
+                json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            return text
 
         except (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException) as e:
             if attempt < _MAX_RETRIES:
