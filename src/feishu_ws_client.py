@@ -18,8 +18,9 @@ from lark_oapi.api.im.v1 import PatchMessageRequest, PatchMessageRequestBody
 from lark_oapi.api.im.v1 import CreateMessageReactionRequest, CreateMessageReactionRequestBody, Emoji
 
 from .analyzer_sdk import analyze_from_url as analyze
-from .arxiv import parse_arxiv_url
+from .url_parser import parse_paper_url, parse_github_url
 from .config import settings
+from .deepwiki_client import ask_repo_summary
 
 logger = logging.getLogger(__name__)
 
@@ -483,6 +484,16 @@ def do_p2_im_message_receive_v1(data: lark.im.v1.P2ImMessageReceiveV1) -> None:
         try:
             content = json.loads(content_str)
             text = content.get("text", "")
+            # 富文本消息（post 类型）：从 content 数组中提取所有文本和链接
+            if not text and "content" in content:
+                parts = []
+                for row in content["content"]:
+                    for seg in row:
+                        if seg.get("tag") == "text":
+                            parts.append(seg.get("text", ""))
+                        elif seg.get("tag") == "a":
+                            parts.append(seg.get("href", seg.get("text", "")))
+                text = " ".join(parts)
         except:
             text = content_str
 
@@ -492,16 +503,23 @@ def do_p2_im_message_receive_v1(data: lark.im.v1.P2ImMessageReceiveV1) -> None:
             logger.info("消息未 @ 机器人，忽略")
             return
 
-        # 提取 arXiv URL
-        arxiv_url = parse_arxiv_url(text)
+        # 提取 URL：优先论文 → GitHub 仓库
+        arxiv_url = parse_paper_url(text)
+        github_url = None
         if not arxiv_url:
+            github_url = parse_github_url(text)
+
+        if not arxiv_url and not github_url:
             reply_message(
                 message_id,
-                "未找到有效的 arXiv 论文链接。请发送类似 `https://arxiv.org/abs/2401.xxxxx` 的链接。"
+                "未找到有效的论文或 GitHub 仓库链接。请发送 arXiv 链接或 GitHub 仓库 URL。"
             )
             return
 
-        logger.info(f"找到 arXiv URL: {arxiv_url}")
+        if arxiv_url:
+            logger.info(f"找到 arXiv URL: {arxiv_url}")
+        else:
+            logger.info(f"找到 GitHub URL: {github_url}")
 
         # 在原消息上添加 reaction，让用户立即看到响应
         add_reaction(message_id)
@@ -509,17 +527,25 @@ def do_p2_im_message_receive_v1(data: lark.im.v1.P2ImMessageReceiveV1) -> None:
         # 在独立线程中处理分析（避免阻塞 WebSocket）
         def process():
             try:
-                result = analyze(arxiv_url)
+                if arxiv_url:
+                    result = analyze(arxiv_url)
 
-                if result["returncode"] == 0:
-                    paper_id = result.get("arxiv_id", "")
-                    reply_paper_card(message_id, result["stdout"], arxiv_url, paper_id)
+                    if result["returncode"] == 0:
+                        paper_id = result.get("arxiv_id", "")
+                        reply_paper_card(message_id, result["stdout"], arxiv_url, paper_id)
+                    else:
+                        error_msg = f"❌ 论文分析失败: {result.get('stderr', 'Unknown error')}"
+                        reply_card_message(message_id, error_msg)
                 else:
-                    error_msg = f"❌ 论文分析失败: {result.get('stderr', 'Unknown error')}"
-                    reply_card_message(message_id, error_msg)
+                    try:
+                        summary = ask_repo_summary(github_url)
+                        reply_card_message(message_id, summary)
+                    except Exception as e:
+                        logger.exception(f"仓库分析异常: {github_url}, error={e}")
+                        reply_card_message(message_id, f"❌ 仓库分析失败: {str(e)}")
 
             except Exception as e:
-                logger.exception(f"处理论文异常: message_id={message_id}, error={e}")
+                logger.exception(f"处理异常: message_id={message_id}, error={e}")
                 reply_card_message(message_id, f"❌ 处理过程中发生错误: {str(e)}")
 
         threading.Thread(target=process, daemon=True).start()

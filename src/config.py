@@ -46,5 +46,8 @@ class Settings:
     # MinerU 后端配置
     mineru_backend = os.getenv("MINERU_BACKEND", "pipeline")
 
+    # DeepWiki MCP
+    deepwiki_mcp_url = os.getenv("DEEPWIKI_MCP_URL", "https://mcp.deepwiki.com/mcp")
+
 
 settings = Settings()

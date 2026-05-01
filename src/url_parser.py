@@ -1,6 +1,4 @@
-"""
-arXiv 和 CVF 工具函数
-"""
+"""URL 解析工具函数（arXiv、CVF、HuggingFace、GitHub）"""
 import re
 from typing import Optional
 
@@ -57,7 +55,7 @@ def extract_paper_id(url: str) -> str:
     return ""
 
 
-def parse_arxiv_url(text: str) -> Optional[str]:
+def parse_paper_url(text: str) -> Optional[str]:
     """
     从文本中提取论文 URL (arXiv、CVF 或 Hugging Face)
 
@@ -91,3 +89,24 @@ def build_arxiv_url(arxiv_id: str) -> str:
         arXiv URL
     """
     return f"https://arxiv.org/abs/{arxiv_id}"
+
+
+GITHUB_PATTERN = re.compile(
+    r'https?://github\.com/(?P<owner>[^/]+)/(?P<repo>[\w.-]+)(?:\.git)?(?:/.*)?'
+)
+
+
+def extract_github_repo_id(url: str) -> str | None:
+    """从 GitHub URL 提取 owner_repo 格式的 ID。"""
+    if not url:
+        return None
+    if m := GITHUB_PATTERN.search(url):
+        return f"{m.group('owner')}_{m.group('repo')}"
+    return None
+
+
+def parse_github_url(text: str) -> str | None:
+    """从文本中提取 GitHub 仓库 URL。"""
+    if m := GITHUB_PATTERN.search(text):
+        return m.group(0)
+    return None
