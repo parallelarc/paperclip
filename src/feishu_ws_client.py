@@ -340,12 +340,12 @@ def _process_markdown_images(markdown: str, paper_id: str) -> Dict[str, str]:
     return image_keys
 
 
-def create_paper_card(markdown: str, arxiv_url: str = "", icon: str = "📄", paper_id: str = "") -> dict:
+def create_paper_card(markdown: str, paper_url: str = "", icon: str = "📄", paper_id: str = "") -> dict:
     """将论文分析的 markdown 转换为飞书卡片格式
 
     Args:
         markdown: 论文分析 markdown 内容
-        arxiv_url: arXiv 论文 URL（用于添加按钮）
+        paper_url: 论文 URL（用于添加按钮）
         icon: 卡片图标
         paper_id: 论文 ID，用于定位图片目录
 
@@ -370,29 +370,29 @@ def create_paper_card(markdown: str, arxiv_url: str = "", icon: str = "📄", pa
         }
     }
 
-    if arxiv_url:
+    if paper_url:
         card["body"]["elements"].extend([
             {"tag": "hr"},
-            {"tag": "markdown", "content": f"[📄 查看原文 (arXiv)]({arxiv_url})"}
+            {"tag": "markdown", "content": f"[📄 查看原文]({paper_url})"}
         ])
 
     return card
 
 
-def update_with_paper_card(message_id: str, markdown: str, arxiv_url: str = "", paper_id: str = "") -> bool:
+def update_with_paper_card(message_id: str, markdown: str, paper_url: str = "", paper_id: str = "") -> bool:
     """更新消息为论文分析卡片
 
     Args:
         message_id: 要更新的消息 ID
         markdown: 论文分析 markdown 内容
-        arxiv_url: arXiv 论文 URL（用于添加按钮）
+        paper_url: 论文 URL（用于添加按钮）
         paper_id: 论文 ID，用于定位图片目录
 
     Returns:
         是否成功
     """
     client = _create_client()
-    card = create_paper_card(markdown, arxiv_url, paper_id=paper_id)
+    card = create_paper_card(markdown, paper_url, paper_id=paper_id)
 
     request = PatchMessageRequest.builder() \
         .message_id(message_id) \
@@ -414,20 +414,20 @@ def update_with_paper_card(message_id: str, markdown: str, arxiv_url: str = "", 
     return True
 
 
-def reply_paper_card(message_id: str, markdown: str, arxiv_url: str = "", paper_id: str = "") -> Optional[str]:
+def reply_paper_card(message_id: str, markdown: str, paper_url: str = "", paper_id: str = "") -> Optional[str]:
     """回复论文分析卡片
 
     Args:
         message_id: 要回复的消息 ID
         markdown: 论文分析 markdown 内容
-        arxiv_url: arXiv 论文 URL（用于添加按钮）
+        paper_url: 论文 URL（用于添加按钮）
         paper_id: 论文 ID，用于定位图片目录
 
     Returns:
         新消息的 message_id，失败返回 None
     """
     client = _create_client()
-    card = create_paper_card(markdown, arxiv_url, paper_id=paper_id)
+    card = create_paper_card(markdown, paper_url, paper_id=paper_id)
 
     request = ReplyMessageRequest.builder() \
         .message_id(message_id) \
@@ -494,7 +494,7 @@ def do_p2_im_message_receive_v1(data: lark.im.v1.P2ImMessageReceiveV1) -> None:
                         elif seg.get("tag") == "a":
                             parts.append(seg.get("href", seg.get("text", "")))
                 text = " ".join(parts)
-        except:
+        except Exception:
             text = content_str
 
         # 检查是否 @ 机器人
@@ -504,20 +504,20 @@ def do_p2_im_message_receive_v1(data: lark.im.v1.P2ImMessageReceiveV1) -> None:
             return
 
         # 提取 URL：优先论文 → GitHub 仓库
-        arxiv_url = parse_paper_url(text)
+        paper_url = parse_paper_url(text)
         github_url = None
-        if not arxiv_url:
+        if not paper_url:
             github_url = parse_github_url(text)
 
-        if not arxiv_url and not github_url:
+        if not paper_url and not github_url:
             reply_message(
                 message_id,
                 "未找到有效的论文或 GitHub 仓库链接。请发送 arXiv 链接或 GitHub 仓库 URL。"
             )
             return
 
-        if arxiv_url:
-            logger.info(f"找到 arXiv URL: {arxiv_url}")
+        if paper_url:
+            logger.info(f"找到论文 URL: {paper_url}")
         else:
             logger.info(f"找到 GitHub URL: {github_url}")
 
@@ -527,12 +527,12 @@ def do_p2_im_message_receive_v1(data: lark.im.v1.P2ImMessageReceiveV1) -> None:
         # 在独立线程中处理分析（避免阻塞 WebSocket）
         def process():
             try:
-                if arxiv_url:
-                    result = analyze(arxiv_url)
+                if paper_url:
+                    result = analyze(paper_url)
 
                     if result["returncode"] == 0:
                         paper_id = result.get("arxiv_id", "")
-                        reply_paper_card(message_id, result["stdout"], arxiv_url, paper_id)
+                        reply_paper_card(message_id, result["stdout"], paper_url, paper_id)
                     else:
                         error_msg = f"❌ 论文分析失败: {result.get('stderr', 'Unknown error')}"
                         reply_card_message(message_id, error_msg)
@@ -572,7 +572,7 @@ def _start_lark_client():
         settings.feishu_app_id,
         settings.feishu_app_secret,
         event_handler=event_handler,
-        log_level=lark.LogLevel.DEBUG
+        log_level=lark.LogLevel.INFO
     )
 
     _client.start()

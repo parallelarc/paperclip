@@ -3,7 +3,7 @@ SDK 直调版论文分析器 — 替代 subprocess claude CLI 方案
 
 对比原 analyzer.py:
 - 去掉 subprocess + claude CLI 依赖
-- 3 次串行 API 调用对应 Deep → Notes → Quick 管道
+- 2 次串行 API 调用对应 Deep → Quick 管道
 - 精确异常捕获（RateLimitError / APIConnectionError / ...）
 - 内置指数退避重试
 - 直接读写文件，不经过 CLI 的 skill/tool-call 循环
@@ -25,7 +25,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # 默认值
 # ---------------------------------------------------------------------------
-_DEFAULT_MODEL = "claude-sonnet-4-20250514"
 _DEFAULT_TIMEOUT = 600          # 秒，与原版一致
 _DEFAULT_MAX_RETRIES = 3
 _BACKOFF_BASE = 30              # 退避基数（秒）
@@ -35,7 +34,6 @@ _BACKOFF_BASE = 30              # 退避基数（秒）
 # ---------------------------------------------------------------------------
 _SKILL_DIR = Path(__file__).parent.parent / ".claude" / "skills" / "paper-reader"
 _TEMPLATE_DEEP = _SKILL_DIR / "references" / "paper-deep.md"
-_TEMPLATE_NOTES = _SKILL_DIR / "references" / "paper-notes.md"
 _TEMPLATE_QUICK = _SKILL_DIR / "references" / "paper-quick.md"
 
 
@@ -64,16 +62,6 @@ def _build_deep_prompt(paper_md: str, metadata: dict, url: str) -> str:
         f"## 分析要求\n\n"
         f"请按照以下模板格式，对上述论文进行完整的深度分析。\n\n"
         f"--- 模板开始 ---\n{_load_template(_TEMPLATE_DEEP)}\n--- 模板结束 ---"
-    )
-
-
-def _build_notes_prompt(deep_md: str, metadata: dict) -> str:
-    return (
-        f"## 深度分析\n\n{deep_md}\n\n"
-        f"## 元数据\n\n```json\n{json.dumps(metadata, ensure_ascii=False, indent=2)}\n```\n\n"
-        f"## 要求\n\n"
-        f"从深度分析中提炼笔记，严格按照以下模板格式输出。\n\n"
-        f"--- 模板开始 ---\n{_load_template(_TEMPLATE_NOTES)}\n--- 模板结束 ---"
     )
 
 
@@ -144,13 +132,13 @@ def analyze(
     max_retries: int = _DEFAULT_MAX_RETRIES,
 ) -> dict:
     """
-    执行 Deep → Notes → Quick 三步管道。
+    执行 Deep → Quick 两步管道。
 
     Args:
         paper_id:   论文 ID，如 "2508.16334"
         papers_dir: papers 目录路径
         url:        原始 URL（写入输出）
-        model:      模型名，默认读 env ANTHROPIC_MODEL 或 claude-sonnet-4-20250514
+        model:      模型名，默认读 env ANTHROPIC_MODEL 或 glm-5
         api_key:    API key，默认读 env ANTHROPIC_API_KEY
         base_url:   自定义 endpoint，默认读 env ANTHROPIC_BASE_URL
         max_retries: 429 重试次数
@@ -159,12 +147,14 @@ def analyze(
         {"returncode": 0, "stdout": <quick_md_content>, "arxiv_id": paper_id}
         或 {"returncode": 1, "stderr": <error_msg>, "arxiv_id": paper_id}
     """
+    from .config import settings
+
     papers_dir = Path(papers_dir)
     paper_dir = papers_dir / paper_id
 
-    model = model or os.getenv("ANTHROPIC_MODEL", _DEFAULT_MODEL)
-    api_key = api_key or os.getenv("ANTHROPIC_API_KEY", "")
-    base_url = base_url or os.getenv("ANTHROPIC_BASE_URL", "")
+    model = model or settings.anthropic_model
+    api_key = api_key or settings.anthropic_api_key
+    base_url = base_url or settings.anthropic_base_url
 
     if not api_key:
         return {
@@ -200,9 +190,8 @@ def analyze(
         client_kwargs["base_url"] = base_url
     client = Anthropic(**client_kwargs)
 
-    # ---- 检查缓存：三个输出文件都已存在则跳过 ----
+    # ---- 检查缓存：quick 已存在则跳过 ----
     deep_path = paper_dir / f"{paper_id}_deep.md"
-    notes_path = paper_dir / f"{paper_id}_notes.md"
     quick_path = paper_dir / f"{paper_id}_quick.md"
 
     if quick_path.exists():
@@ -214,44 +203,35 @@ def analyze(
             "arxiv_id": paper_id,
         }
 
-    # ---- Step 1: Deep Analysis ----
-    try:
-        logger.info("Step 1/3: Deep Analysis — paper_id=%s", paper_id)
-        deep_md = _call_with_retry(
-            client, model,
-            _build_deep_prompt(paper_md, metadata, url),
-            max_tokens=16384,
-            max_retries=max_retries,
-        )
-        deep_path.write_text(deep_md, encoding="utf-8")
-        logger.info("Deep 完成，写入 %s (%d 字符)", deep_path, len(deep_md))
-    except Exception as e:
-        logger.error("Deep 分析失败: paper_id=%s — %s", paper_id, e)
-        return {
-            "returncode": 1,
-            "stdout": "",
-            "stderr": f"Deep 分析失败: {e}",
-            "arxiv_id": paper_id,
-        }
+    # ---- Step 1: Deep Analysis（支持 deep 缓存跳过）----
+    deep_md = None
+    if deep_path.exists():
+        deep_md = deep_path.read_text(encoding="utf-8")
+        logger.info("使用 deep 缓存: paper_id=%s", paper_id)
 
-    # ---- Step 2: Notes ----
-    try:
-        logger.info("Step 2/3: Notes — paper_id=%s", paper_id)
-        notes_md = _call_with_retry(
-            client, model,
-            _build_notes_prompt(deep_md, metadata),
-            max_tokens=8192,
-            max_retries=max_retries,
-        )
-        notes_path.write_text(notes_md, encoding="utf-8")
-        logger.info("Notes 完成，写入 %s (%d 字符)", notes_path, len(notes_md))
-    except Exception as e:
-        logger.warning("Notes 失败（继续）: paper_id=%s — %s", paper_id, e)
-        # Notes 失败不阻塞 Quick
+    if deep_md is None:
+        try:
+            logger.info("Step 1/2: Deep Analysis — paper_id=%s", paper_id)
+            deep_md = _call_with_retry(
+                client, model,
+                _build_deep_prompt(paper_md, metadata, url),
+                max_tokens=16384,
+                max_retries=max_retries,
+            )
+            deep_path.write_text(deep_md, encoding="utf-8")
+            logger.info("Deep 完成，写入 %s (%d 字符)", deep_path, len(deep_md))
+        except Exception as e:
+            logger.error("Deep 分析失败: paper_id=%s — %s", paper_id, e)
+            return {
+                "returncode": 1,
+                "stdout": "",
+                "stderr": f"Deep 分析失败: {e}",
+                "arxiv_id": paper_id,
+            }
 
-    # ---- Step 3: Quick Scan ----
+    # ---- Step 2: Quick Scan ----
     try:
-        logger.info("Step 3/3: Quick Scan — paper_id=%s", paper_id)
+        logger.info("Step 2/2: Quick Scan — paper_id=%s", paper_id)
         quick_md = _call_with_retry(
             client, model,
             _build_quick_prompt(deep_md, metadata),
@@ -303,14 +283,14 @@ def _extract_quick_fallback(deep_md: str) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
-# 兼容旧接口：analyze_from_url(arxiv_url) → fetch + SDK analyze
+# 兼容旧接口：analyze_from_url(url) → fetch + SDK analyze
 # ---------------------------------------------------------------------------
-def analyze_from_url(arxiv_url: str) -> dict:
+def analyze_from_url(url: str) -> dict:
     """
     从 URL 下载论文并执行 SDK 分析（兼容旧 analyzer.analyze 接口）。
 
     Args:
-        arxiv_url: 论文 URL (arXiv 或 CVF)
+        url: 论文 URL (arXiv / CVF / HuggingFace)
 
     Returns:
         {"returncode": 0, "stdout": <quick_md>, "arxiv_id": paper_id}
@@ -321,16 +301,16 @@ def analyze_from_url(arxiv_url: str) -> dict:
 
     # 1. 下载论文
     try:
-        logger.info("fetch_paper: %s", arxiv_url)
+        logger.info("fetch_paper: %s", url)
         paper_id = fetch_paper(
-            input_url=arxiv_url,
+            input_url=url,
             output=str(settings.env_dir / "papers"),
             device=settings.mineru_gpu_device,
             backend=settings.mineru_backend,
         )
         logger.info("fetch_paper 成功: paper_id=%s", paper_id)
     except Exception as e:
-        logger.error("fetch_paper 失败: %s — %s", arxiv_url, e)
+        logger.error("fetch_paper 失败: %s — %s", url, e)
         return {
             "returncode": 1,
             "stdout": "",
@@ -342,5 +322,5 @@ def analyze_from_url(arxiv_url: str) -> dict:
     return analyze(
         paper_id=paper_id,
         papers_dir=settings.env_dir / "papers",
-        url=arxiv_url,
+        url=url,
     )

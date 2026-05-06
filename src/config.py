@@ -49,5 +49,10 @@ class Settings:
     # DeepWiki MCP
     deepwiki_mcp_url = os.getenv("DEEPWIKI_MCP_URL", "https://mcp.deepwiki.com/mcp")
 
+    # Anthropic API
+    anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    anthropic_base_url = os.getenv("ANTHROPIC_BASE_URL", "")
+    anthropic_model = os.getenv("ANTHROPIC_MODEL", "glm-5")
+
 
 settings = Settings()

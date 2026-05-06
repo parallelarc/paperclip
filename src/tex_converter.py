@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Pandoc-based TeX to Markdown converter."""
 
+import logging
 import re
 import shutil
 import subprocess
 from pathlib import Path
 from typing import List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def find_balanced_brace(text: str, start: int) -> int:
@@ -64,13 +67,15 @@ def preprocess_latex_for_pandoc(tex_content: str) -> str:
     # 去除 \makeno{...}
     tex_content = strip_cmd('makeno', tex_content)
 
-    # 去除所有 \centerline{...} 整行（使用括号计数）
+    # 去除所有 \centerline{...} 和 \newcolumntype{...} 整行
     lines = tex_content.split('\n')
     result_lines = []
     for line in lines:
         stripped = line.strip()
         if stripped.startswith('\\centerline'):
-            continue  # 跳过整行
+            continue
+        if stripped.startswith('\\newcolumntype'):
+            continue
         result_lines.append(line)
     tex_content = '\n'.join(result_lines)
 
@@ -104,7 +109,7 @@ def flatten_latex_file(tex_file: Path, output: Optional[Path] = None) -> Path:
         included_file = tex_file.parent / filename
 
         if not included_file.exists():
-            print(f"  ⚠️  Input文件不存在，保留命令: \\input{{{filename}}}")
+            logger.warning("Input文件不存在，保留命令: \\input{%s}", filename)
             return match.group(0)  # 保留原命令
 
         content = included_file.read_text(encoding='utf-8')
@@ -123,15 +128,15 @@ def flatten_latex_file(tex_file: Path, output: Optional[Path] = None) -> Path:
 
     # 检测是否有input命令
     if not input_pattern.search(content):
-        print(f"  ℹ️  单一LaTeX文件，无需合并")
+        logger.info("单一LaTeX文件，无需合并")
         return tex_file
 
-    print(f"  🔧 检测到{{input_pattern.findall(content)|len()}}个\\input/\\include命令，开始合并...")
+    logger.info("检测到%d个\\input/\\include命令，开始合并...", len(input_pattern.findall(content)))
 
     merged_content = input_pattern.sub(resolve_input, content)
     output.write_text(merged_content, encoding='utf-8')
 
-    print(f"  ✅ 合并完成: {output.name}")
+    logger.info("合并完成: %s", output.name)
     return output
 
 
@@ -149,15 +154,15 @@ def convert_pdf_to_png(pdf_path: Path, dpi: int = 200) -> Optional[Path]:
         doc.close()
 
         if not png_path.exists():
-            print(f"  ⚠️  PNG未生成: {png_path.name}")
+            logger.warning("PNG未生成: %s", png_path.name)
             return None
 
         size_kb = png_path.stat().st_size // 1024
-        print(f"  📷 PDF→PNG: {png_path.name} ({size_kb}KB)")
+        logger.info("PDF→PNG: %s (%dKB)", png_path.name, size_kb)
         return png_path
 
     except Exception as e:
-        print(f"  ❌ 转换异常: {e}")
+        logger.error("转换异常: %s", e)
         return None
 
 
@@ -215,7 +220,7 @@ def post_process_markdown_images(md_file: Path, output_dir: Path) -> None:
     # 保存修改后的文件
     if content != original_content:
         md_file.write_text(content, encoding='utf-8')
-        print(f"  ✅ 已修复图片引用: {md_file.name}")
+        logger.info("已修复图片引用: %s", md_file.name)
 
 
 class PandocConverter:
@@ -266,6 +271,7 @@ class PandocConverter:
             "--standalone",
             "--katex",                        # 使用KaTeX处理数学公式
             "--extract-media=" + str(media_dir),  # 提取图片到images目录
+            "--resource-path=" + str(self.tex_file.parent.resolve()),  # 图片等资源的搜索路径
             "--markdown-headings=atx",          # 使用ATX标题格式 (# ## ###)
             "-f",
             "latex",
@@ -293,10 +299,10 @@ class PandocConverter:
                 extra_args=self._build_extra_args(),
                 outputfile=str(md_output),
             )
-            print(f"  ✅ pypandoc 转换成功: {md_output.name}")
+            logger.info("pypandoc 转换成功: %s", md_output.name)
             return True
         except Exception as e:
-            print(f"  pypandoc 转换失败，尝试 CLI 回退: {e}")
+            logger.warning("pypandoc 转换失败，尝试 CLI 回退: %s", e)
             return False
 
     def _convert_with_cli(self, md_output: Path, source_tex: Path) -> bool:
@@ -308,7 +314,7 @@ class PandocConverter:
             except Exception:
                 pass
         if not pandoc_bin:
-            print("  ❌ pandoc 未安装，无法执行 TeX 转换")
+            logger.error("pandoc 未安装，无法执行 TeX 转换")
             return False
 
         cmd = [
@@ -323,6 +329,7 @@ class PandocConverter:
             "--standalone",
             "--katex",
             "--wrap=none",
+            "--resource-path=" + str(self.tex_file.parent.resolve()),
         ]
         for bib in self.bib_files:
             cmd.append(f"--bibliography={bib}")
@@ -331,14 +338,14 @@ class PandocConverter:
 
         try:
             subprocess.run(cmd, check=True, capture_output=True, text=True)
-            print(f"  ✅ pandoc CLI 转换成功: {md_output.name}")
+            logger.info("pandoc CLI 转换成功: %s", md_output.name)
             return True
         except subprocess.CalledProcessError as e:
             stderr = (e.stderr or "").strip()
             if stderr:
-                print(f"  ❌ pandoc CLI 转换失败: {stderr}")
+                logger.error("pandoc CLI 转换失败: %s", stderr)
             else:
-                print("  ❌ pandoc CLI 转换失败")
+                logger.error("pandoc CLI 转换失败")
             return False
 
 

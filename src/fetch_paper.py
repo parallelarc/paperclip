@@ -25,6 +25,7 @@
 import argparse
 import httpx
 import json
+import logging
 import os
 import random
 import re
@@ -32,6 +33,8 @@ import shutil
 import time
 from pathlib import Path
 from typing import List, Tuple
+
+logger = logging.getLogger(__name__)
 
 try:
     from .tex_converter import PandocConverter
@@ -85,8 +88,101 @@ def parse_arxiv_id(input_str: str) -> str:
     raise ValueError(f"不是 arXiv 来源: {input_str}")
 
 
+def _fetch_semanticscholar_metadata(arxiv_id: str) -> dict | None:
+    """Semantic Scholar API fallback"""
+    url = f"https://api.semanticscholar.org/graph/v1/paper/arXiv:{arxiv_id}"
+    fields = "title,authors,abstract,publicationDate,externalIds"
+    try:
+        with httpx.Client(timeout=30, http2=False, trust_env=False) as client:
+            resp = client.get(url, params={"fields": fields}, follow_redirects=True)
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as e:
+        logger.error("Semantic Scholar fallback 失败: %s", e)
+        return None
+
+    if not data.get("title"):
+        return None
+
+    authors = [a.get("name", "") for a in data.get("authors", []) if a.get("name")]
+    published = data.get("publicationDate", "")[:10]
+    abstract = data.get("abstract", "")
+
+    return {
+        'source': 'arxiv',
+        'id': arxiv_id,
+        'title': data["title"],
+        'authors': authors,
+        'summary': abstract,
+        'published': published,
+        'pdf_url': f"https://arxiv.org/pdf/{arxiv_id}.pdf",
+        'abs_url': f"https://arxiv.org/abs/{arxiv_id}",
+    }
+
+
+def _fetch_arxiv_abs_metadata(arxiv_id: str) -> dict | None:
+    """从 arXiv 摘要页面直接解析元数据（web 前端，限流策略不同于 export API）"""
+    url = f"https://arxiv.org/abs/{arxiv_id}"
+    try:
+        with httpx.Client(timeout=30, http2=False, trust_env=False) as client:
+            resp = client.get(url, follow_redirects=True, headers={
+                "User-Agent": "Mozilla/5.0 (compatible; paper-fetcher/1.0)"
+            })
+            resp.raise_for_status()
+            html = resp.text
+    except Exception as e:
+        logger.error("arXiv abs 页面 fallback 失败: %s", e)
+        return None
+
+    title_match = re.search(r'<h1\s+class="title\s+mathjs">(.*?)</h1>', html, re.DOTALL)
+    if not title_match:
+        title_match = re.search(r'<h1\s+class="title">(.*?)</h1>', html, re.DOTALL)
+    if not title_match:
+        return None
+
+    title = re.sub(r'<[^>]+>', '', title_match.group(1)).replace('Title:', '').strip()
+
+    authors = re.findall(r'<meta\s+name="citation_author"\s+content="([^"]+)"', html)
+    if not authors:
+        author_block = re.search(r'<div\s+class="authors">(.*?)</div>', html, re.DOTALL)
+        if author_block:
+            authors = re.findall(r'>([^<]+)</a>', author_block.group(1))
+            authors = [a.strip().strip(',') for a in authors if a.strip()]
+
+    abstract_match = re.search(
+        r'<blockquote\s+class="abstract\s+mathjs">(.*?)</blockquote>', html, re.DOTALL
+    )
+    if not abstract_match:
+        abstract_match = re.search(r'<blockquote\s+class="abstract">(.*?)</blockquote>', html, re.DOTALL)
+    summary = ""
+    if abstract_match:
+        summary = re.sub(r'<[^>]+>', '', abstract_match.group(1)).strip()
+        summary = re.sub(r'^Abstract:\s*', '', summary)
+
+    date_match = re.search(r'<meta\s+name="citation_date"\s+content="([^"]+)"', html)
+    published = ""
+    if date_match:
+        date_str = date_match.group(1).strip()
+        m = re.match(r'(\d{4})/(\d{2})/(\d{2})', date_str)
+        if m:
+            published = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+
+    return {
+        'source': 'arxiv',
+        'id': arxiv_id,
+        'title': title,
+        'authors': authors,
+        'summary': summary,
+        'published': published,
+        'pdf_url': f"https://arxiv.org/pdf/{arxiv_id}.pdf",
+        'abs_url': f"https://arxiv.org/abs/{arxiv_id}",
+    }
+
+
 def fetch_arxiv_metadata(arxiv_id: str) -> dict:
-    """从 arXiv API 获取元数据（带重试）
+    """从 arXiv API 获取元数据（带重试，限流时依次 fallback）
+
+    Fallback 链: Semantic Scholar API → arXiv abs 页面解析
 
     Args:
         arxiv_id: arXiv 论文 ID
@@ -105,16 +201,38 @@ def fetch_arxiv_metadata(arxiv_id: str) -> dict:
                 content = response.text
             break
         except Exception as e:
+            is_rate_limited = isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 429
+            if is_rate_limited and attempt == 0:
+                # 首次 429 立即尝试 fallback 链，避免长时间等待
+                logger.info("arXiv API 限流，尝试 fallback...")
+                for fallback_fn, name in [
+                    (_fetch_semanticscholar_metadata, "Semantic Scholar"),
+                    (_fetch_arxiv_abs_metadata, "arXiv abs"),
+                ]:
+                    logger.info("尝试 %s fallback...", name)
+                    meta = fallback_fn(arxiv_id)
+                    if meta:
+                        logger.info("%s fallback 成功", name)
+                        return meta
             if attempt < max_retries - 1:
-                is_rate_limited = isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 429
                 if is_rate_limited:
                     wait = 15 * (2 ** attempt) + random.uniform(0, 5)
                 else:
                     wait = 3 * (2 ** attempt) + random.uniform(0, 2)
-                print(f"  获取元数据失败 (尝试 {attempt + 1}/{max_retries}): {e}, {wait:.1f}秒后重试...")
+                logger.warning("获取元数据失败 (尝试 %d/%d): %s, %.1f秒后重试...", attempt + 1, max_retries, e, wait)
                 time.sleep(wait)
             else:
-                raise Exception(f"获取 arXiv 元数据失败 (已重试 {max_retries} 次): {e}")
+                # 重试耗尽，再试一次完整 fallback 链
+                logger.info("arXiv API 重试耗尽，尝试 fallback...")
+                for fallback_fn, name in [
+                    (_fetch_semanticscholar_metadata, "Semantic Scholar"),
+                    (_fetch_arxiv_abs_metadata, "arXiv abs"),
+                ]:
+                    meta = fallback_fn(arxiv_id)
+                    if meta:
+                        logger.info("%s fallback 成功", name)
+                        return meta
+                raise Exception(f"获取 arXiv 元数据失败 (所有源均不可用): {e}")
 
     entry_match = re.search(r'<entry>(.*?)</entry>', content, re.DOTALL)
     if not entry_match:
@@ -221,7 +339,7 @@ def fetch_paper(
     env_use_tex = os.getenv("USE_TEX_PIPELINE", "true").strip().lower() not in {"0", "false", "no"}
     effective_use_tex = use_tex and env_use_tex
     if not env_use_tex:
-        print("ℹ️  USE_TEX_PIPELINE=false，已禁用 TeX 路径")
+        logger.info("USE_TEX_PIPELINE=false，已禁用 TeX 路径")
 
     source, normalized = detect_source(input_url)
 
@@ -233,16 +351,16 @@ def fetch_paper(
         raise ValueError(f"不支持的来源: {source}")
 
     paper_id = metadata['id']
-    print(f"📄 [{metadata['source'].upper()}] {metadata['title'][:60]}...")
-    print(f"   作者: {', '.join(metadata['authors'][:3])}{'...' if len(metadata['authors']) > 3 else ''}")
-    print(f"   PDF: {metadata['pdf_url']}")
+    logger.info("[%s] %s...", metadata['source'].upper(), metadata['title'][:60])
+    logger.info("作者: %s%s", ', '.join(metadata['authors'][:3]), '...' if len(metadata['authors']) > 3 else '')
+    logger.info("PDF: %s", metadata['pdf_url'])
 
     output_dir = Path(output) / paper_id
     output_dir.mkdir(parents=True, exist_ok=True)
     md_path = output_dir / f"{paper_id}.md"
 
     if md_path.exists():
-        print("⏭️  已存在，跳过下载")
+        logger.info("已存在，跳过下载")
         print(f"PAPER_ID:{paper_id}")
         return paper_id
 
@@ -250,7 +368,7 @@ def fetch_paper(
 
     # 路径 1: arXiv TeX 源码优先
     if source == "arxiv" and effective_use_tex and not force_pdf:
-        print("⬇️  尝试 TeX 源码下载...")
+        logger.info("尝试 TeX 源码下载...")
         success = _try_tex_source_pipeline(
             arxiv_id=normalized,
             metadata=metadata,
@@ -259,7 +377,7 @@ def fetch_paper(
 
     # 路径 2: PDF 回退（或非 arXiv）
     if not success:
-        print("⬇️  回退到 PDF 解析...")
+        logger.info("回退到 PDF 解析...")
         success = _try_pdf_pipeline(
             metadata=metadata,
             output_dir=output_dir,
@@ -275,7 +393,7 @@ def fetch_paper(
         encoding='utf-8'
     )
 
-    print(f"✅ {output_dir}")
+    logger.info("%s", output_dir)
     print(f"PAPER_ID:{paper_id}")
     return paper_id
 
@@ -301,7 +419,7 @@ def _try_tex_source_pipeline(arxiv_id: str, metadata: dict, output_dir: Path) ->
         dpi=200
     )
     if extracted:
-        print(f"  ✅ 提取图像: {len(extracted)} 个")
+        logger.info("提取图像: %d 个", len(extracted))
 
     # 新增: 后处理markdown文件
     from .tex_converter import post_process_markdown_images
@@ -315,7 +433,7 @@ def _try_tex_source_pipeline(arxiv_id: str, metadata: dict, output_dir: Path) ->
 
 def _try_pdf_pipeline(metadata: dict, output_dir: Path, backend: str) -> bool:
     """PDF fallback path using MinerU."""
-    print(f"  正在解析 PDF (后端: {backend})...")
+    logger.info("正在解析 PDF (后端: %s)...", backend)
     from mineru.cli.common import do_parse
 
     paper_id = metadata["id"]
@@ -324,15 +442,15 @@ def _try_pdf_pipeline(metadata: dict, output_dir: Path, backend: str) -> bool:
 
     try:
         if origin_pdf_path.exists():
-            print(f"  使用缓存的 PDF: {origin_pdf_path}")
+            logger.info("使用缓存的 PDF: %s", origin_pdf_path)
             pdf_bytes = origin_pdf_path.read_bytes()
         else:
-            print(f"  正在下载 PDF: {metadata['pdf_url']}")
+            logger.info("正在下载 PDF: %s", metadata['pdf_url'])
             with httpx.Client(timeout=60, http2=False, trust_env=False) as client:
                 response = client.get(metadata["pdf_url"], follow_redirects=True)
                 response.raise_for_status()
                 pdf_bytes = response.content
-            print(f"  PDF 已下载 ({len(pdf_bytes)} bytes)")
+            logger.info("PDF 已下载 (%d bytes)", len(pdf_bytes))
 
         do_parse(
             output_dir=str(output_dir),
@@ -349,7 +467,7 @@ def _try_pdf_pipeline(metadata: dict, output_dir: Path, backend: str) -> bool:
         _reorganize_output(output_dir, pdf_filename, paper_id)
         return (output_dir / f"{paper_id}.md").exists()
     except Exception as e:
-        print(f"  ❌ PDF 解析失败: {e}")
+        logger.error("PDF 解析失败: %s", e)
         return False
 
 
@@ -391,7 +509,7 @@ def extract_figures_from_tex(
             png_path = convert_pdf_to_png(dest, dpi=dpi)
             if png_path:
                 copied.append(png_path)
-                print(f"  📷 已转换: {png_path.name}")
+                logger.info("已转换: %s", png_path.name)
                 # 保留原PDF作为备份（可选）
                 # dest.unlink()  # 如需删除PDF，取消注释
             else:
@@ -435,7 +553,7 @@ def _reorganize_output(output_dir: Path, pdf_filename: str, paper_id: str) -> No
             shutil.rmtree(pdf_dir)
         return
 
-    print("  整理输出文件...")
+    logger.info("整理输出文件...")
 
     for src_file in mineru_dir.iterdir():
         if src_file.is_file():
@@ -443,7 +561,7 @@ def _reorganize_output(output_dir: Path, pdf_filename: str, paper_id: str) -> No
             if dest_file.exists() and dest_file != src_file:
                 dest_file.unlink()
             shutil.move(str(src_file), str(dest_file))
-            print(f"    {src_file.name}")
+            logger.info("%s", src_file.name)
 
     images_dir = mineru_dir / "images"
     if images_dir.exists():
@@ -451,7 +569,7 @@ def _reorganize_output(output_dir: Path, pdf_filename: str, paper_id: str) -> No
         if dest_images.exists():
             shutil.rmtree(dest_images)
         shutil.move(str(images_dir), str(dest_images))
-        print(f"    images/")
+        logger.info("images/")
 
     shutil.rmtree(mineru_dir.parent)
 
@@ -459,7 +577,7 @@ def _reorganize_output(output_dir: Path, pdf_filename: str, paper_id: str) -> No
     new_md = output_dir / f"{paper_id}.md"
     if old_md.exists():
         old_md.rename(new_md)
-        print(f"    {paper_id}.md")
+        logger.info("%s.md", paper_id)
 
 
 def main():

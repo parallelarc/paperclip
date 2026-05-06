@@ -99,18 +99,18 @@ def _run_fetch_script(url: str) -> str:
     return paper_id
 
 
-def analyze(arxiv_url: str) -> dict:
+def analyze(url: str) -> dict:
     """
     执行论文分析，返回 quick 格式结果
 
     Args:
-        arxiv_url: 论文 URL (arXiv 或 CVF)
+        url: 论文 URL (arXiv / CVF / HuggingFace)
 
     Returns:
         包含 returncode, stdout, stderr 的字典
     """
     # 强制先执行 fetch-paper.py，获取正确的 paper_id
-    paper_id = _run_fetch_script(arxiv_url)
+    paper_id = _run_fetch_script(url)
     result_file = get_result_path(paper_id)
 
     # 检查缓存
@@ -129,7 +129,7 @@ def analyze(arxiv_url: str) -> dict:
     md_file = f"papers/{paper_id}/{paper_id}.md"
     prompt = (
         f"/paper-reader @{md_file}\n\n"
-        f"原始 URL: {arxiv_url}\n\n"
+        f"原始 URL: {url}\n\n"
         f"数据已准备好（.md 和 _metadata.json 已存在）。\n"
         f"输出分析结果到 papers/{paper_id}\n\n"
         f"请用中文输出分析内容（保留英文术语/作者名/论文标题）"

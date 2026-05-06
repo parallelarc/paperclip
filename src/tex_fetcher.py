@@ -9,7 +9,11 @@ import time
 from pathlib import Path
 from typing import Optional, Tuple
 
+import logging
+
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 class TeXFetcher:
@@ -33,16 +37,16 @@ class TeXFetcher:
         try:
             self._extract_tar_gz(tar_gz_bytes, self.tex_source_dir)
         except Exception as e:
-            print(f"  ❌ TeX 解压失败: {e}")
+            logger.error("TeX 解压失败: %s", e)
             return False, None
 
         main_tex = self._identify_main_tex(self.tex_source_dir)
         if not main_tex:
-            print("  ❌ 未识别到主 .tex 文件")
+            logger.error("未识别到主 .tex 文件")
             return False, None
 
         main_tex_path = self.tex_source_dir / main_tex
-        print(f"  ✅ 识别主文件: {main_tex}")
+        logger.info("识别主文件: %s", main_tex)
         return True, main_tex_path
 
     def _download_tar_gz(self) -> Optional[bytes]:
@@ -58,16 +62,16 @@ class TeXFetcher:
                     data = response.content
                 if not data:
                     raise ValueError("空响应")
-                print(f"  ✅ 已下载 TeX 源码: {len(data)} bytes")
+                logger.info("已下载 TeX 源码: %d bytes", len(data))
                 return data
             except Exception as e:
                 if attempt < max_retries - 1:
                     is_rate_limited = isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 429
                     wait = 15 * (2 ** attempt) + random.uniform(0, 5) if is_rate_limited else 3 * (2 ** attempt) + random.uniform(0, 2)
-                    print(f"  下载 TeX 失败 (尝试 {attempt + 1}/{max_retries}): {e}, {wait:.1f}秒后重试...")
+                    logger.info("下载 TeX 失败 (尝试 %d/%d): %s, %.1f秒后重试...", attempt + 1, max_retries, e, wait)
                     time.sleep(wait)
                 else:
-                    print(f"  ❌ 下载 TeX 失败: {e}")
+                    logger.error("下载 TeX 失败: %s", e)
                     return None
         return None
 

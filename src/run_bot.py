@@ -11,6 +11,13 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+
+# Lark SDK 会自己加 handler 并 propagate 到 root，导致重复输出
+# 清掉 SDK 自带 handler，统一走 root logger 的格式和级别控制
+_lark_logger = logging.getLogger("Lark")
+_lark_logger.handlers.clear()
+_lark_logger.setLevel(logging.INFO)
+
 logger = logging.getLogger(__name__)
 
 
